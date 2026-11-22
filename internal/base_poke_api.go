@@ -12,6 +12,10 @@ var cache = NewCache(
 	10 * time.Minute,
 )
 
+var httpClient = &http.Client{
+	Timeout: 10 * time.Second,
+}
+
 func PokeGet[T any](endpoint string) (T, error) {
 	var data T
 	// TO DO passar a reconhecer o tipo de struct
@@ -21,11 +25,12 @@ func PokeGet[T any](endpoint string) (T, error) {
 	if found {
 		output = result
 	} else {
-		resp, err := http.Get(endpoint)
+		resp, err := httpClient.Get(endpoint)
 		if err != nil {
 			return data, fmt.Errorf("Unable to retrieve data: %w", err)
 		}
 		if resp.StatusCode != 200 {
+			resp.Body.Close()
 			return data, fmt.Errorf("Error in query: %s", resp.Status)
 		}
 		body, err := io.ReadAll(resp.Body)
