@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -32,94 +31,47 @@ func TestCleanInput(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		actual := cleanInput(c.input)
+		c := c
+		t.Run(c.input, func(t *testing.T) {
+			actual := cleanInput(c.input)
 
-		if len(actual) != len(c.expected) {
-			t.Errorf("Expected: %v, Actual: %v", c.expected, actual)
-			t.Fail()
-		}
-		for i := range actual {
-			word := actual[i]
-			expectedWord := c.expected[i]
-			if word != expectedWord {
-				t.Errorf("Expected: %s, Actual: %s", expectedWord, word)
-				t.Fail()
+			if len(actual) != len(c.expected) {
+				t.Fatalf("cleanInput(%q) returned %v; want %v", c.input, actual, c.expected)
 			}
-		}
+			for i := range actual {
+				if actual[i] != c.expected[i] {
+					t.Errorf("cleanInput(%q)[%d] = %q; want %q", c.input, i, actual[i], c.expected[i])
+				}
+			}
+		})
 	}
 }
 
-type input struct {
-	key   string
-	value []byte
-}
-type expected struct {
-	value []byte
-	found bool
-}
+func TestCacheAddAndGet(t *testing.T) {
+	cache := pokego.NewCache(time.Hour)
+	cache.Add("testcase", []byte("test"))
 
-// ensure cache is properly adding,
-func TestAddToCache(t *testing.T) {
-	cases := []struct {
-		input    input
-		expected expected
-	}{
-		{
-			input{
-				key:   "testcase",
-				value: []byte("test"),
-			},
-			expected{
-				value: []byte("test"),
-				found: true,
-			},
-		},
+	got, found := cache.Get("testcase")
+	if !found {
+		t.Fatal("Get() did not find the added entry")
 	}
-	fmt.Println("Cache Get Test")
-	testCache := pokego.NewCache(60)
-	fmt.Println("Running test cases")
-	for _, testCase := range cases {
-		entryKey := testCase.input.key
-		entryValue := testCase.input.value
-		testCache.Add(entryKey, entryValue)
-		result, found := testCache.Get(entryKey)
-		fmt.Printf("Input: %s %s\nExpected: %s %t\nResult: %s %t\n", entryKey, entryValue,
-			entryValue, true,
-			result, found)
+	if string(got) != "test" {
+		t.Fatalf("Get() = %q; want %q", got, "test")
 	}
-
+	if _, found := cache.Get("missing"); found {
+		t.Fatal("Get() found an entry that was never added")
+	}
 }
 
-func TestReapLoop(T *testing.T) {
-	cases := []struct {
-		input    input
-		expected expected
-	}{
-		{
-			input{
-				key:   "timetestcase",
-				value: []byte("timehasnotpassedyet"),
-			},
-			expected{
-				value: nil,
-				found: false,
-			},
-		},
-	}
-	fmt.Println("Cache Reaploop Test")
-	testCache := pokego.NewCache(5 * time.Second)
-	fmt.Println("Running test cases")
-	for _, testCase := range cases {
-		entryKey := testCase.input.key
-		entryValue := testCase.input.value
-		testCache.Add(entryKey, entryValue)
-		time.Sleep(6 * time.Second)
-		result, found := testCache.Get(entryKey)
-		fmt.Printf("Input: %s %s\nExpected: %s %t\nResult: %s %t\n", entryKey, entryValue,
-			testCase.expected.value, false,
-			result, found)
-	}
+func TestCacheReapsExpiredEntry(t *testing.T) {
+	const ttl = 40 * time.Millisecond
+	cache := pokego.NewCache(ttl)
+	cache.Add("expired", []byte("value"))
 
+	time.Sleep(3 * ttl)
+	if got, found := cache.Get("expired"); found {
+		t.Fatalf("Get() found expired entry %q", got)
+	}
 }
 
 func TestPokeGetUsesCache(t *testing.T) {
@@ -131,7 +83,7 @@ func TestPokeGetUsesCache(t *testing.T) {
 	}))
 	defer server.Close()
 
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 6; i++ {
 		got, err := pokego.PokeGet[map[string]string](server.URL)
 		if err != nil {
 			t.Fatalf("PokeGet() error: %v", err)
@@ -143,5 +95,27 @@ func TestPokeGetUsesCache(t *testing.T) {
 
 	if got := requests.Load(); got != 1 {
 		t.Fatalf("server received %d requests, want 1", got)
+	}
+}
+
+func TestPokeGetReturnsErrorForNonOKResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	if _, err := pokego.PokeGet[map[string]string](server.URL); err == nil {
+		t.Fatal("PokeGet() returned no error for a non-200 response")
+	}
+}
+
+func TestPokeGetReturnsErrorForInvalidJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("{"))
+	}))
+	defer server.Close()
+
+	if _, err := pokego.PokeGet[map[string]string](server.URL); err == nil {
+		t.Fatal("PokeGet() returned no error for invalid JSON")
 	}
 }
