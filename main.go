@@ -92,11 +92,11 @@ func saveProgress(c *config, saveFileName string) error {
 	filePath := filepath.Join(saveDirectoryName, fileName)
 
 	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE, os.ModePerm)
-	defer file.Close()
-
 	if err != nil {
 		return fmt.Errorf("ERROR: Unable to open file %w", err)
 	}
+	defer file.Close()
+
 	encoder := gob.NewEncoder(file)
 	if err := encoder.Encode(pokedex); err != nil {
 		panic(err)
