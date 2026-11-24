@@ -2,10 +2,12 @@ package main
 
 import (
 	"bufio"
+	"encoding/gob"
 	"errors"
 	"fmt"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"strings"
 
 	pokego "github.com/vinagoros/go-repl/internal"
@@ -14,6 +16,8 @@ import (
 // passar endpoint para módulo base de get
 var baseEndpoint string = "https://pokeapi.co/api/v2/"
 var pokedex map[string]pokemonDetails = make(map[string]pokemonDetails)
+var saveDirectoryName string = "saves"
+var defaultFileName string = "save_1.gob"
 
 type location struct {
 	Name string `json:"name"`
@@ -70,13 +74,57 @@ type cliCommand struct {
 	callbackFunc func(*config, string) error
 }
 
+func saveProgress(c *config, saveFileName string) error {
+
+	fmt.Println("Saving your progress:")
+	fileName := defaultFileName
+	if saveFileName != "" {
+		fileName = saveFileName
+	}
+	_, err := os.ReadDir(saveDirectoryName)
+	if err != nil {
+		if os.IsNotExist(err) {
+			os.Mkdir(saveDirectoryName, os.ModePerm)
+		} else {
+			return err
+		}
+	}
+	filePath := filepath.Join(saveDirectoryName, fileName)
+
+	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE, os.ModePerm)
+	defer file.Close()
+
+	if err != nil {
+		return fmt.Errorf("ERROR: Unable to open file %w", err)
+	}
+	encoder := gob.NewEncoder(file)
+	if err := encoder.Encode(pokedex); err != nil {
+		panic(err)
+	}
+	fmt.Printf("Progress saved to %s\n", filePath)
+	return nil
+}
+
+func loadProgress() error {
+	saveFile, err := os.OpenFile(filepath.Join(saveDirectoryName, defaultFileName), os.O_RDONLY|os.O_CREATE, os.ModePerm)
+	if err != nil {
+		return fmt.Errorf("ERROR: Unable to open savefile %w", err)
+	}
+	defer saveFile.Close()
+	decoder := gob.NewDecoder(saveFile)
+	if err := decoder.Decode(&pokedex); err != nil {
+		return fmt.Errorf("ERROR: Savefile is corrupt: %w", err)
+	}
+	return nil
+}
+
 func exit(c *config, arg string) error {
 	fmt.Println("Closing the Pokedex... Goodbye!")
 	os.Exit(0)
 	return nil
 }
 
-func pokeMap(c *config, arg string) error {
+func pokeMap(c *config, _ string) error {
 	endpoint := baseEndpoint + "location-area/" //passar endpoint para modulo base
 	if c.next == "" && c.previous != "" {
 		return fmt.Errorf("No further locations available")
@@ -96,7 +144,7 @@ func pokeMap(c *config, arg string) error {
 	return nil
 }
 
-func pokeMapB(c *config, arg string) error {
+func pokeMapB(c *config, _ string) error {
 	var endpoint string
 	if c.previous != "" {
 		endpoint = c.previous
@@ -212,6 +260,11 @@ var supportedCommands = map[string]cliCommand{
 		description:  "Inspects pokedex entry of a specified Pokemon",
 		callbackFunc: inspect,
 	},
+	"save": {
+		name:         "save",
+		description:  "Saves your current progress to a file",
+		callbackFunc: saveProgress,
+	},
 }
 
 func main() {
@@ -224,6 +277,7 @@ func main() {
 		availableCommands: supportedCommands,
 	}
 	reader := bufio.NewScanner(os.Stdin)
+	loadProgress()
 	for {
 		fmt.Print("Pokedex > ")
 		read := reader.Scan()
@@ -235,7 +289,7 @@ func main() {
 		}
 		result := reader.Text()
 		firstWord, arg, _ := strings.Cut(result, " ")
-		command := strings.Trim(strings.ToLower(firstWord), " ")
+		command := strings.TrimSpace(strings.ToLower(firstWord))
 		for key, supportCommand := range supportedCommands {
 			if key == command {
 				err := supportCommand.callbackFunc(&conf, arg)
